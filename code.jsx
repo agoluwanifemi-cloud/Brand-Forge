@@ -1,23 +1,6 @@
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 
-const GOOGLE_FONTS = [
-  { name: "Playfair Display", category: "Serif", style: "Elegant & Editorial" },
-  { name: "Montserrat", category: "Sans-Serif", style: "Modern & Clean" },
-  { name: "Lora", category: "Serif", style: "Classic & Warm" },
-  { name: "Raleway", category: "Sans-Serif", style: "Thin & Sophisticated" },
-  { name: "Merriweather", category: "Serif", style: "Readable & Traditional" },
-  { name: "Oswald", category: "Sans-Serif", style: "Bold & Condensed" },
-  { name: "Poppins", category: "Sans-Serif", style: "Geometric & Friendly" },
-  { name: "Cormorant Garamond", category: "Serif", style: "Luxurious & Refined" },
-  { name: "Work Sans", category: "Sans-Serif", style: "Neutral & Professional" },
-  { name: "DM Serif Display", category: "Serif", style: "Strong & Distinctive" },
-  { name: "Space Grotesk", category: "Sans-Serif", style: "Tech & Contemporary" },
-  { name: "Bitter", category: "Serif", style: "Sturdy & Readable" },
-  { name: "Archivo", category: "Sans-Serif", style: "Grotesque & Versatile" },
-  { name: "Libre Baskerville", category: "Serif", style: "Classic & Literary" },
-  { name: "Syne", category: "Sans-Serif", style: "Experimental & Bold" },
-];
-
+// ─── Curated Palettes ───
 const PALETTES = [
   { name: "Midnight Luxe", colors: ["#0D1B2A", "#1B263B", "#415A77", "#778DA9", "#E0E1DD"] },
   { name: "Sunset Coral", colors: ["#FF6B6B", "#FFA07A", "#FFD93D", "#6BCB77", "#4D96FF"] },
@@ -31,748 +14,840 @@ const PALETTES = [
   { name: "Sage & Sand", colors: ["#606C38", "#7C8B5E", "#BCBD8B", "#DDA15E", "#FEFAE0"] },
 ];
 
-const INDUSTRIES = [
-  "Technology", "Fashion & Apparel", "Food & Beverage", "Health & Wellness",
-  "Finance & Banking", "Education", "Real Estate", "Entertainment & Media",
-  "Travel & Hospitality", "Beauty & Cosmetics", "Sports & Fitness",
-  "Non-Profit", "Automotive", "Architecture & Design", "Legal Services", "Other"
-];
+// ─── Utility: Parse Colors from SVG ───
+function extractSvgColors(svgString) {
+  const colorSet = new Set();
+  // Match hex colors
+  const hexPattern = /#(?:[0-9a-fA-F]{3}){1,2}\b/g;
+  let match;
+  while ((match = hexPattern.exec(svgString)) !== null) {
+    colorSet.add(normalizeHex(match[0]));
+  }
+  // Match rgb/rgba
+  const rgbPattern = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/g;
+  while ((match = rgbPattern.exec(svgString)) !== null) {
+    colorSet.add(rgbToHex(+match[1], +match[2], +match[3]));
+  }
+  // Match named colors in fill/stroke attributes
+  const namedPattern = /(?:fill|stroke)\s*[:=]\s*"?(white|black|red|blue|green|yellow|orange|purple|pink|gray|grey|navy|teal|cyan|maroon|olive|silver|aqua|fuchsia|lime)"?/gi;
+  const namedMap = {
+    white: "#FFFFFF", black: "#000000", red: "#FF0000", blue: "#0000FF",
+    green: "#008000", yellow: "#FFFF00", orange: "#FFA500", purple: "#800080",
+    pink: "#FFC0CB", gray: "#808080", grey: "#808080", navy: "#000080",
+    teal: "#008080", cyan: "#00FFFF", maroon: "#800000", olive: "#808000",
+    silver: "#C0C0C0", aqua: "#00FFFF", fuchsia: "#FF00FF", lime: "#00FF00"
+  };
+  while ((match = namedPattern.exec(svgString)) !== null) {
+    const name = match[1].toLowerCase();
+    if (namedMap[name]) colorSet.add(namedMap[name]);
+  }
+  // Remove "none" and transparent-like values
+  colorSet.delete("#NaN");
+  return Array.from(colorSet).filter(c => c && c !== "none");
+}
 
-function StepIndicator({ current, total }) {
+function normalizeHex(hex) {
+  hex = hex.toUpperCase();
+  if (hex.length === 4) {
+    return "#" + hex[1] + hex[1] + hex[2] + hex[2] + hex[3] + hex[3];
+  }
+  return hex;
+}
+
+function rgbToHex(r, g, b) {
+  return "#" + [r, g, b].map(x => x.toString(16).padStart(2, "0")).join("").toUpperCase();
+}
+
+function hexToRgb(hex) {
+  hex = normalizeHex(hex);
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return { r, g, b };
+}
+
+function getLuminance(hex) {
+  const { r, g, b } = hexToRgb(hex);
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+}
+
+function recolorSvg(svgString, colorMap) {
+  let result = svgString;
+  // Sort by length descending so longer hex codes get replaced first
+  const entries = Object.entries(colorMap).sort((a, b) => b[0].length - a[0].length);
+  for (const [original, replacement] of entries) {
+    // Replace hex (case insensitive)
+    const escapedOrig = original.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(escapedOrig, "gi");
+    result = result.replace(regex, replacement);
+    // Also handle 3-char shorthand if applicable
+    if (original.length === 7) {
+      const r = original[1], g = original[3], b = original[5];
+      if (original[1] === original[2] && original[3] === original[4] && original[5] === original[6]) {
+        const short = `#${r}${g}${b}`;
+        const shortRegex = new RegExp(short.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), "gi");
+        result = result.replace(shortRegex, replacement);
+      }
+    }
+  }
+  return result;
+}
+
+function generateMonochrome(svgString, extractedColors, targetColor) {
+  const sorted = [...extractedColors].sort((a, b) => getLuminance(a) - getLuminance(b));
+  const map = {};
+  const { r, g, b } = hexToRgb(targetColor);
+  sorted.forEach((c, i) => {
+    const factor = sorted.length === 1 ? 1 : i / (sorted.length - 1);
+    // Blend from target color (darkest) to lighter tint
+    const nr = Math.round(r + (255 - r) * factor * 0.7);
+    const ng = Math.round(g + (255 - g) * factor * 0.7);
+    const nb = Math.round(b + (255 - b) * factor * 0.7);
+    map[c] = rgbToHex(nr, ng, nb);
+  });
+  return recolorSvg(svgString, map);
+}
+
+function generateSingleColor(svgString, extractedColors, color) {
+  const map = {};
+  extractedColors.forEach(c => { map[c] = color; });
+  return recolorSvg(svgString, map);
+}
+
+function generateInverted(svgString, extractedColors) {
+  const map = {};
+  extractedColors.forEach(c => {
+    const lum = getLuminance(c);
+    map[c] = lum > 0.5 ? "#1A1A1A" : "#FFFFFF";
+  });
+  return recolorSvg(svgString, map);
+}
+
+// ─── SVG Renderer ───
+function SvgDisplay({ svgString, bg, label, size = 80, sublabel }) {
+  const containerBg = bg || "#FFFFFF";
+  const isDark = getLuminance(containerBg) < 0.4;
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 40 }}>
-      {Array.from({ length: total }, (_, i) => (
-        <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+    <div style={{
+      background: containerBg,
+      borderRadius: 14,
+      padding: 20,
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      justifyContent: "center",
+      minHeight: 140,
+      border: containerBg === "#FFFFFF" ? "1px solid #eee" : "none",
+      position: "relative",
+      overflow: "hidden",
+      transition: "transform 0.2s, box-shadow 0.2s",
+    }}
+    onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = "0 8px 24px rgba(0,0,0,0.12)"; }}
+    onMouseLeave={e => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.boxShadow = "none"; }}
+    >
+      <div
+        dangerouslySetInnerHTML={{ __html: svgString }}
+        style={{ width: size, height: size, display: "flex", alignItems: "center", justifyContent: "center" }}
+      />
+      {label && (
+        <div style={{
+          marginTop: 12, fontSize: 11, fontWeight: 600,
+          color: isDark ? "rgba(255,255,255,0.6)" : "#999",
+          textTransform: "uppercase", letterSpacing: 1.5
+        }}>
+          {label}
+        </div>
+      )}
+      {sublabel && (
+        <div style={{
+          marginTop: 2, fontSize: 10,
+          color: isDark ? "rgba(255,255,255,0.4)" : "#bbb",
+          fontFamily: "monospace"
+        }}>
+          {sublabel}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Color Mapping UI ───
+function ColorMapper({ extractedColors, brandColors, colorMap, setColorMap }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{
+        fontSize: 12, color: "#888", lineHeight: 1.6, padding: "12px 16px",
+        background: "#f8f9fa", borderRadius: 10, border: "1px solid #f0f0f0"
+      }}>
+        Map each color found in your logo to a brand color. Click a brand color swatch to assign it.
+      </div>
+      {extractedColors.map((origColor) => (
+        <div key={origColor} style={{
+          display: "flex", alignItems: "center", gap: 12,
+          padding: "10px 14px", background: "#fff", borderRadius: 10,
+          border: "1px solid #f0f0f0"
+        }}>
           <div style={{
-            width: 36, height: 36, borderRadius: "50%",
-            background: i <= current ? "#1a1a1a" : "#e5e5e5",
-            color: i <= current ? "#fff" : "#999",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: 14, fontWeight: 600,
-            transition: "all 0.3s ease",
-            fontFamily: "'DM Sans', sans-serif"
-          }}>
-            {i < current ? "✓" : i + 1}
+            width: 36, height: 36, borderRadius: 8, background: origColor,
+            border: "1px solid #e0e0e0", flexShrink: 0,
+            boxShadow: "inset 0 0 0 1px rgba(0,0,0,0.05)"
+          }} />
+          <div style={{ fontSize: 11, color: "#999", fontFamily: "monospace", width: 64 }}>
+            {origColor}
           </div>
-          {i < total - 1 && (
-            <div style={{
-              width: 40, height: 2,
-              background: i < current ? "#1a1a1a" : "#e5e5e5",
-              transition: "all 0.3s ease"
-            }} />
-          )}
+          <svg width="20" height="12" viewBox="0 0 20 12" style={{ flexShrink: 0 }}>
+            <path d="M2 6h12m0 0l-4-4m4 4l-4 4" stroke="#ccc" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+          <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+            {brandColors.map((bc) => (
+              <div
+                key={bc}
+                onClick={() => setColorMap(prev => ({ ...prev, [origColor]: bc }))}
+                style={{
+                  width: 32, height: 32, borderRadius: 6, background: bc,
+                  cursor: "pointer", border: colorMap[origColor] === bc ? "3px solid #1a1a1a" : "2px solid transparent",
+                  boxShadow: colorMap[origColor] === bc ? "0 0 0 1px #fff, 0 0 0 3px #1a1a1a" : "inset 0 0 0 1px rgba(0,0,0,0.1)",
+                  transition: "all 0.15s",
+                  transform: colorMap[origColor] === bc ? "scale(1.1)" : "scale(1)"
+                }}
+                title={bc}
+              />
+            ))}
+            <input
+              type="color"
+              value={colorMap[origColor] || origColor}
+              onChange={(e) => setColorMap(prev => ({ ...prev, [origColor]: e.target.value.toUpperCase() }))}
+              style={{
+                width: 32, height: 32, border: "2px dashed #ddd", borderRadius: 6,
+                cursor: "pointer", padding: 0, background: "transparent"
+              }}
+              title="Custom color"
+            />
+          </div>
         </div>
       ))}
     </div>
   );
 }
 
-function LogoUpload({ logo, setLogo }) {
-  const fileRef = useRef(null);
-  const [dragging, setDragging] = useState(false);
-
-  const handleFile = (file) => {
-    if (file && file.type.startsWith("image/")) {
-      const reader = new FileReader();
-      reader.onload = (e) => setLogo(e.target.result);
-      reader.readAsDataURL(file);
-    }
-  };
-
+// ─── Palette Selector ───
+function PaletteStrip({ palette, isSelected, onClick }) {
   return (
     <div
-      onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-      onDragLeave={() => setDragging(false)}
-      onDrop={(e) => { e.preventDefault(); setDragging(false); handleFile(e.dataTransfer.files[0]); }}
-      onClick={() => fileRef.current?.click()}
+      onClick={onClick}
       style={{
-        border: `2px dashed ${dragging ? "#1a1a1a" : logo ? "#ccc" : "#bbb"}`,
-        borderRadius: 16, padding: logo ? 20 : 60,
-        textAlign: "center", cursor: "pointer",
-        background: dragging ? "#f5f5f5" : "#fafafa",
-        transition: "all 0.2s ease",
-        minHeight: 200, display: "flex", flexDirection: "column",
-        alignItems: "center", justifyContent: "center", gap: 12
+        display: "flex", flexDirection: "column", gap: 6,
+        padding: 10, borderRadius: 10, cursor: "pointer",
+        border: `2px solid ${isSelected ? "#1a1a1a" : "#eee"}`,
+        background: isSelected ? "#fafafa" : "#fff",
+        transition: "all 0.15s",
+        minWidth: 120
       }}
     >
-      <input ref={fileRef} type="file" accept="image/*" hidden
-        onChange={(e) => handleFile(e.target.files[0])} />
-      {logo ? (
-        <>
-          <img src={logo} alt="Logo" style={{ maxHeight: 120, maxWidth: "80%", objectFit: "contain" }} />
-          <p style={{ color: "#888", fontSize: 13, margin: 0 }}>Click or drag to replace</p>
-        </>
-      ) : (
-        <>
-          <div style={{ fontSize: 48, lineHeight: 1 }}>⬆</div>
-          <p style={{ color: "#555", margin: 0, fontSize: 16, fontWeight: 500 }}>
-            Drop your logo here or click to upload
-          </p>
-          <p style={{ color: "#999", margin: 0, fontSize: 13 }}>SVG, PNG, or JPG — transparent background recommended</p>
-        </>
-      )}
-    </div>
-  );
-}
-
-function FontSelector({ selected, onSelect, label }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div style={{ marginBottom: 16 }}>
-      <label style={{ fontSize: 13, fontWeight: 600, color: "#555", marginBottom: 6, display: "block", textTransform: "uppercase", letterSpacing: 1 }}>
-        {label}
-      </label>
-      <div
-        onClick={() => setOpen(!open)}
-        style={{
-          padding: "12px 16px", border: "1px solid #ddd", borderRadius: 10,
-          cursor: "pointer", background: "#fff", display: "flex",
-          justifyContent: "space-between", alignItems: "center"
-        }}
-      >
-        <span style={{ fontFamily: selected ? `'${selected}', serif` : "inherit", fontWeight: 500 }}>
-          {selected || "Select a font…"}
-        </span>
-        <span style={{ transform: open ? "rotate(180deg)" : "none", transition: "0.2s" }}>▾</span>
-      </div>
-      {open && (
-        <div style={{
-          border: "1px solid #ddd", borderRadius: 10, marginTop: 4,
-          maxHeight: 240, overflowY: "auto", background: "#fff",
-          boxShadow: "0 8px 24px rgba(0,0,0,0.08)", zIndex: 10, position: "relative"
-        }}>
-          {GOOGLE_FONTS.map((f) => (
-            <div
-              key={f.name}
-              onClick={() => { onSelect(f.name); setOpen(false); }}
-              style={{
-                padding: "10px 16px", cursor: "pointer",
-                background: selected === f.name ? "#f0f0f0" : "transparent",
-                borderBottom: "1px solid #f5f5f5",
-                display: "flex", justifyContent: "space-between", alignItems: "center"
-              }}
-              onMouseEnter={(e) => e.currentTarget.style.background = "#f8f8f8"}
-              onMouseLeave={(e) => e.currentTarget.style.background = selected === f.name ? "#f0f0f0" : "transparent"}
-            >
-              <span style={{ fontWeight: 500 }}>{f.name}</span>
-              <span style={{ fontSize: 12, color: "#999" }}>{f.style}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ColorPaletteSelector({ selected, onSelect, customColors, setCustomColors }) {
-  const [showCustom, setShowCustom] = useState(false);
-
-  return (
-    <div>
-      <label style={{ fontSize: 13, fontWeight: 600, color: "#555", marginBottom: 12, display: "block", textTransform: "uppercase", letterSpacing: 1 }}>
-        Color Palette
-      </label>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
-        {PALETTES.map((p, i) => (
-          <div
-            key={p.name}
-            onClick={() => { onSelect(i); setShowCustom(false); }}
-            style={{
-              padding: 12, borderRadius: 10, cursor: "pointer",
-              border: `2px solid ${selected === i && !showCustom ? "#1a1a1a" : "#eee"}`,
-              background: "#fff", transition: "all 0.2s"
-            }}
-          >
-            <div style={{ display: "flex", gap: 3, marginBottom: 6 }}>
-              {p.colors.map((c) => (
-                <div key={c} style={{ flex: 1, height: 24, borderRadius: 4, background: c }} />
-              ))}
-            </div>
-            <p style={{ margin: 0, fontSize: 12, fontWeight: 600, color: "#444" }}>{p.name}</p>
-          </div>
+      <div style={{ display: "flex", gap: 2, height: 20, borderRadius: 4, overflow: "hidden" }}>
+        {palette.colors.map(c => (
+          <div key={c} style={{ flex: 1, background: c }} />
         ))}
       </div>
-      <div
-        onClick={() => setShowCustom(!showCustom)}
-        style={{
-          padding: "10px 16px", borderRadius: 10, cursor: "pointer",
-          border: `2px solid ${showCustom ? "#1a1a1a" : "#eee"}`,
-          background: "#fff", textAlign: "center", fontSize: 13, fontWeight: 600, color: "#555"
-        }}
-      >
-        ✏️ Custom Colors
+      <div style={{ fontSize: 10, fontWeight: 600, color: "#666", textAlign: "center" }}>
+        {palette.name}
       </div>
-      {showCustom && (
-        <div style={{ display: "flex", gap: 8, marginTop: 10, alignItems: "center" }}>
-          {customColors.map((c, i) => (
-            <div key={i} style={{ textAlign: "center" }}>
-              <input
-                type="color" value={c}
-                onChange={(e) => {
-                  const nc = [...customColors];
-                  nc[i] = e.target.value;
-                  setCustomColors(nc);
-                }}
-                style={{ width: 44, height: 44, border: "none", borderRadius: 8, cursor: "pointer", padding: 0 }}
-              />
-              <div style={{ fontSize: 10, color: "#999", marginTop: 2 }}>{c}</div>
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
 
-// Brand Identity Preview / Output
-function BrandPreview({ data }) {
-  const { logo, brandName, tagline, industry, mission, vision, about, headingFont, bodyFont, palette, customColors, paletteIndex } = data;
-  const colors = paletteIndex !== null ? PALETTES[paletteIndex].colors : customColors;
-  const primary = colors[0];
-  const secondary = colors[1];
-  const accent = colors[2];
-  const light = colors[4] || colors[3];
-  const mid = colors[3] || colors[2];
+// ─── Download helpers ───
+function downloadSvg(svgString, filename) {
+  const blob = new Blob([svgString], { type: "image/svg+xml" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
 
-  const section = {
-    padding: "48px 40px", borderBottom: `1px solid ${colors[4]}22`
+function downloadPng(svgString, filename, size = 1024) {
+  const canvas = document.createElement("canvas");
+  canvas.width = size; canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  const img = new Image();
+  const blob = new Blob([svgString], { type: "image/svg+xml" });
+  const url = URL.createObjectURL(blob);
+  img.onload = () => {
+    const scale = Math.min(size / img.width, size / img.height) * 0.8;
+    const w = img.width * scale;
+    const h = img.height * scale;
+    ctx.drawImage(img, (size - w) / 2, (size - h) / 2, w, h);
+    canvas.toBlob((b) => {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(b);
+      a.download = filename; a.click();
+    }, "image/png");
+    URL.revokeObjectURL(url);
   };
-
-  return (
-    <div style={{ background: "#fff", fontFamily: `'${bodyFont}', sans-serif` }}>
-      {/* Cover Page */}
-      <div style={{
-        background: `linear-gradient(135deg, ${primary}, ${secondary})`,
-        padding: "80px 60px", textAlign: "center", color: "#fff",
-        minHeight: 400, display: "flex", flexDirection: "column",
-        alignItems: "center", justifyContent: "center", gap: 24,
-        position: "relative", overflow: "hidden"
-      }}>
-        <div style={{
-          position: "absolute", top: -100, right: -100, width: 400, height: 400,
-          borderRadius: "50%", background: `${accent}22`
-        }} />
-        <div style={{
-          position: "absolute", bottom: -60, left: -60, width: 250, height: 250,
-          borderRadius: "50%", background: `${light}15`
-        }} />
-        {logo && <img src={logo} alt="Logo" style={{ maxHeight: 100, maxWidth: 200, objectFit: "contain", position: "relative", zIndex: 1 }} />}
-        <h1 style={{
-          fontFamily: `'${headingFont}', serif`, fontSize: 48, fontWeight: 700,
-          margin: 0, position: "relative", zIndex: 1, letterSpacing: -1
-        }}>
-          {brandName || "Brand Name"}
-        </h1>
-        {tagline && <p style={{ fontSize: 18, opacity: 0.85, margin: 0, position: "relative", zIndex: 1, fontStyle: "italic" }}>{tagline}</p>}
-        <div style={{
-          marginTop: 16, padding: "8px 24px", border: "1px solid rgba(255,255,255,0.3)",
-          borderRadius: 30, fontSize: 13, letterSpacing: 2, textTransform: "uppercase",
-          position: "relative", zIndex: 1
-        }}>
-          Brand Identity Guidelines
-        </div>
-      </div>
-
-      {/* Logo Usage */}
-      <div style={section}>
-        <h2 style={{ fontFamily: `'${headingFont}', serif`, fontSize: 28, margin: "0 0 8px", color: primary }}>
-          01 — Logo
-        </h2>
-        <p style={{ color: "#777", marginBottom: 24, fontSize: 14 }}>Primary logo mark and usage guidelines</p>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
-          {[
-            { bg: "#ffffff", label: "Light Background", border: true },
-            { bg: primary, label: "On Brand Color", border: false },
-            { bg: "#1a1a1a", label: "Dark Background", border: false }
-          ].map((v) => (
-            <div key={v.label} style={{
-              background: v.bg, borderRadius: 12, padding: 32,
-              display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-              minHeight: 140, border: v.border ? "1px solid #eee" : "none"
-            }}>
-              {logo && <img src={logo} alt="" style={{ maxHeight: 60, maxWidth: "80%", objectFit: "contain" }} />}
-              <span style={{ fontSize: 11, color: v.bg === "#ffffff" ? "#999" : "rgba(255,255,255,0.6)", marginTop: 12, textTransform: "uppercase", letterSpacing: 1 }}>
-                {v.label}
-              </span>
-            </div>
-          ))}
-        </div>
-        <div style={{ marginTop: 20, padding: 20, background: "#fafafa", borderRadius: 10, fontSize: 13, color: "#666", lineHeight: 1.7 }}>
-          <strong>Clear Space:</strong> Maintain a minimum clear space equal to the height of the logomark around all sides. Never distort, rotate, or apply effects to the logo.
-        </div>
-      </div>
-
-      {/* Color Palette */}
-      <div style={section}>
-        <h2 style={{ fontFamily: `'${headingFont}', serif`, fontSize: 28, margin: "0 0 8px", color: primary }}>
-          02 — Color Palette
-        </h2>
-        <p style={{ color: "#777", marginBottom: 24, fontSize: 14 }}>Brand color system and usage</p>
-        <div style={{ display: "flex", gap: 12 }}>
-          {colors.map((c, i) => (
-            <div key={i} style={{ flex: 1, textAlign: "center" }}>
-              <div style={{
-                background: c, height: 100, borderRadius: 12,
-                boxShadow: "0 2px 8px rgba(0,0,0,0.08)", marginBottom: 8
-              }} />
-              <div style={{ fontSize: 13, fontWeight: 700, color: "#333" }}>{c.toUpperCase()}</div>
-              <div style={{ fontSize: 11, color: "#999", marginTop: 2 }}>
-                {["Primary", "Secondary", "Accent", "Neutral", "Background"][i]}
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Typography */}
-      <div style={section}>
-        <h2 style={{ fontFamily: `'${headingFont}', serif`, fontSize: 28, margin: "0 0 8px", color: primary }}>
-          03 — Typography
-        </h2>
-        <p style={{ color: "#777", marginBottom: 24, fontSize: 14 }}>Font pairing and hierarchy</p>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
-          <div style={{ padding: 24, background: "#fafafa", borderRadius: 12 }}>
-            <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 2, color: "#999", marginBottom: 12 }}>Heading Font</div>
-            <div style={{ fontFamily: `'${headingFont}', serif`, fontSize: 36, fontWeight: 700, color: primary, lineHeight: 1.2 }}>
-              {headingFont}
-            </div>
-            <div style={{ fontFamily: `'${headingFont}', serif`, fontSize: 14, color: "#666", marginTop: 12, lineHeight: 1.6 }}>
-              Aa Bb Cc Dd Ee Ff Gg Hh Ii Jj Kk Ll Mm Nn Oo Pp Qq Rr Ss Tt Uu Vv Ww Xx Yy Zz
-            </div>
-            <div style={{ fontFamily: `'${headingFont}', serif`, fontSize: 14, color: "#666", marginTop: 4 }}>
-              0 1 2 3 4 5 6 7 8 9
-            </div>
-          </div>
-          <div style={{ padding: 24, background: "#fafafa", borderRadius: 12 }}>
-            <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 2, color: "#999", marginBottom: 12 }}>Body Font</div>
-            <div style={{ fontFamily: `'${bodyFont}', sans-serif`, fontSize: 36, fontWeight: 400, color: primary, lineHeight: 1.2 }}>
-              {bodyFont}
-            </div>
-            <div style={{ fontFamily: `'${bodyFont}', sans-serif`, fontSize: 14, color: "#666", marginTop: 12, lineHeight: 1.6 }}>
-              Aa Bb Cc Dd Ee Ff Gg Hh Ii Jj Kk Ll Mm Nn Oo Pp Qq Rr Ss Tt Uu Vv Ww Xx Yy Zz
-            </div>
-            <div style={{ fontFamily: `'${bodyFont}', sans-serif`, fontSize: 14, color: "#666", marginTop: 4 }}>
-              0 1 2 3 4 5 6 7 8 9
-            </div>
-          </div>
-        </div>
-        <div style={{ marginTop: 20, padding: 24, background: primary, borderRadius: 12, color: "#fff" }}>
-          <div style={{ fontFamily: `'${headingFont}', serif`, fontSize: 32, fontWeight: 700, marginBottom: 8 }}>
-            Heading Example
-          </div>
-          <div style={{ fontFamily: `'${bodyFont}', sans-serif`, fontSize: 15, lineHeight: 1.7, opacity: 0.85 }}>
-            This is how your body copy will look paired with the heading font. Good typography creates hierarchy, guides the reader, and reinforces your brand personality across every touchpoint.
-          </div>
-        </div>
-      </div>
-
-      {/* Brand Story */}
-      <div style={section}>
-        <h2 style={{ fontFamily: `'${headingFont}', serif`, fontSize: 28, margin: "0 0 8px", color: primary }}>
-          04 — Brand Story
-        </h2>
-        <p style={{ color: "#777", marginBottom: 24, fontSize: 14 }}>Mission, vision, and purpose</p>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 20 }}>
-          {mission && (
-            <div style={{ padding: 24, background: `${primary}08`, borderLeft: `4px solid ${primary}`, borderRadius: "0 12px 12px 0" }}>
-              <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 2, color: primary, marginBottom: 8, fontWeight: 700 }}>Mission</div>
-              <p style={{ margin: 0, color: "#444", lineHeight: 1.7, fontSize: 14 }}>{mission}</p>
-            </div>
-          )}
-          {vision && (
-            <div style={{ padding: 24, background: `${secondary}08`, borderLeft: `4px solid ${secondary}`, borderRadius: "0 12px 12px 0" }}>
-              <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 2, color: secondary, marginBottom: 8, fontWeight: 700 }}>Vision</div>
-              <p style={{ margin: 0, color: "#444", lineHeight: 1.7, fontSize: 14 }}>{vision}</p>
-            </div>
-          )}
-        </div>
-        {about && (
-          <div style={{ padding: 24, background: "#fafafa", borderRadius: 12 }}>
-            <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 2, color: "#999", marginBottom: 8, fontWeight: 700 }}>About</div>
-            <p style={{ margin: 0, color: "#444", lineHeight: 1.8, fontSize: 14 }}>{about}</p>
-          </div>
-        )}
-      </div>
-
-      {/* Business Card Mockup */}
-      <div style={section}>
-        <h2 style={{ fontFamily: `'${headingFont}', serif`, fontSize: 28, margin: "0 0 8px", color: primary }}>
-          05 — Applications
-        </h2>
-        <p style={{ color: "#777", marginBottom: 24, fontSize: 14 }}>Brand identity in context</p>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
-          {/* Business Card Front */}
-          <div style={{
-            background: primary, borderRadius: 12, padding: 32,
-            color: "#fff", aspectRatio: "1.6/1", display: "flex",
-            flexDirection: "column", justifyContent: "space-between",
-            boxShadow: "0 8px 32px rgba(0,0,0,0.15)"
-          }}>
-            <div>
-              {logo && <img src={logo} alt="" style={{ height: 28, objectFit: "contain", marginBottom: 12, filter: "brightness(10)" }} />}
-              <div style={{ fontFamily: `'${headingFont}', serif`, fontSize: 18, fontWeight: 700 }}>
-                {brandName || "Brand Name"}
-              </div>
-            </div>
-            <div style={{ fontSize: 10, opacity: 0.7, letterSpacing: 1 }}>
-              www.{(brandName || "brand").toLowerCase().replace(/\s+/g, "")}.com
-            </div>
-          </div>
-          {/* Business Card Back */}
-          <div style={{
-            background: "#fff", borderRadius: 12, padding: 32,
-            border: "1px solid #eee", aspectRatio: "1.6/1", display: "flex",
-            flexDirection: "column", justifyContent: "space-between",
-            boxShadow: "0 8px 32px rgba(0,0,0,0.06)"
-          }}>
-            <div>
-              <div style={{ fontFamily: `'${headingFont}', serif`, fontSize: 15, fontWeight: 700, color: primary }}>
-                Jane Designer
-              </div>
-              <div style={{ fontSize: 12, color: "#999", marginTop: 2 }}>Creative Director</div>
-            </div>
-            <div style={{ fontSize: 11, color: "#666", lineHeight: 1.8 }}>
-              <div>jane@{(brandName || "brand").toLowerCase().replace(/\s+/g, "")}.com</div>
-              <div>+1 (555) 000-0000</div>
-              <div style={{ color: accent }}>@{(brandName || "brand").toLowerCase().replace(/\s+/g, "")}</div>
-            </div>
-          </div>
-        </div>
-
-        {/* Letterhead Mockup */}
-        <div style={{
-          marginTop: 24, background: "#fff", border: "1px solid #eee",
-          borderRadius: 12, padding: 40, boxShadow: "0 4px 16px rgba(0,0,0,0.04)",
-          minHeight: 300
-        }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 40 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              {logo && <img src={logo} alt="" style={{ height: 32, objectFit: "contain" }} />}
-              <span style={{ fontFamily: `'${headingFont}', serif`, fontWeight: 700, color: primary, fontSize: 18 }}>
-                {brandName || "Brand Name"}
-              </span>
-            </div>
-            <div style={{ textAlign: "right", fontSize: 11, color: "#999", lineHeight: 1.6 }}>
-              <div>123 Design Street</div>
-              <div>Creative City, ST 00000</div>
-              <div>info@{(brandName || "brand").toLowerCase().replace(/\s+/g, "")}.com</div>
-            </div>
-          </div>
-          <div style={{ fontFamily: `'${bodyFont}', sans-serif`, fontSize: 13, color: "#888", lineHeight: 2 }}>
-            <div style={{ width: "90%", height: 8, background: "#f0f0f0", borderRadius: 4, marginBottom: 8 }} />
-            <div style={{ width: "100%", height: 8, background: "#f0f0f0", borderRadius: 4, marginBottom: 8 }} />
-            <div style={{ width: "85%", height: 8, background: "#f0f0f0", borderRadius: 4, marginBottom: 8 }} />
-            <div style={{ width: "95%", height: 8, background: "#f0f0f0", borderRadius: 4, marginBottom: 8 }} />
-            <div style={{ width: "60%", height: 8, background: "#f0f0f0", borderRadius: 4 }} />
-          </div>
-          <div style={{ borderTop: `2px solid ${primary}`, marginTop: 40, paddingTop: 12, fontSize: 10, color: "#bbb", textAlign: "center" }}>
-            {tagline || `${brandName || "Brand"} — Where great things happen`}
-          </div>
-        </div>
-
-        {/* Social Media Header */}
-        <div style={{
-          marginTop: 24, borderRadius: 12, overflow: "hidden",
-          boxShadow: "0 4px 16px rgba(0,0,0,0.08)"
-        }}>
-          <div style={{
-            background: `linear-gradient(120deg, ${primary}, ${accent})`,
-            height: 120, position: "relative"
-          }}>
-            <div style={{
-              position: "absolute", bottom: -30, left: 24,
-              width: 64, height: 64, borderRadius: "50%",
-              background: "#fff", border: "3px solid #fff",
-              display: "flex", alignItems: "center", justifyContent: "center",
-              boxShadow: "0 2px 8px rgba(0,0,0,0.1)"
-            }}>
-              {logo && <img src={logo} alt="" style={{ height: 32, objectFit: "contain" }} />}
-            </div>
-          </div>
-          <div style={{ padding: "40px 24px 20px", background: "#fff" }}>
-            <div style={{ fontFamily: `'${headingFont}', serif`, fontWeight: 700, fontSize: 16, color: "#1a1a1a" }}>
-              {brandName || "Brand Name"}
-            </div>
-            <div style={{ fontSize: 12, color: "#999", marginTop: 2 }}>
-              @{(brandName || "brand").toLowerCase().replace(/\s+/g, "")} · {industry || "Creative"}
-            </div>
-            <div style={{ fontSize: 13, color: "#555", marginTop: 8, lineHeight: 1.5 }}>
-              {tagline || "Making the world a better place through design."}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Footer */}
-      <div style={{
-        padding: "40px 60px", background: primary, color: "rgba(255,255,255,0.5)",
-        textAlign: "center", fontSize: 12
-      }}>
-        <div style={{ fontFamily: `'${headingFont}', serif`, color: "#fff", fontSize: 18, fontWeight: 700, marginBottom: 8 }}>
-          {brandName || "Brand Name"}
-        </div>
-        Brand Identity Guidelines · Confidential · Generated with BrandForge
-      </div>
-    </div>
-  );
+  img.src = url;
 }
 
-export default function BrandIdentityGenerator() {
-  const [step, setStep] = useState(0);
-  const [logo, setLogo] = useState(null);
-  const [brandName, setBrandName] = useState("");
-  const [tagline, setTagline] = useState("");
-  const [industry, setIndustry] = useState("");
-  const [mission, setMission] = useState("");
-  const [vision, setVision] = useState("");
-  const [about, setAbout] = useState("");
-  const [headingFont, setHeadingFont] = useState("Playfair Display");
-  const [bodyFont, setBodyFont] = useState("Poppins");
-  const [paletteIndex, setPaletteIndex] = useState(0);
-  const [customColors, setCustomColors] = useState(["#1a1a1a", "#444444", "#888888", "#cccccc", "#f5f5f5"]);
-  const [useCustom, setUseCustom] = useState(false);
+function downloadJpeg(svgString, filename, bgColor = "#FFFFFF", size = 1024) {
+  const canvas = document.createElement("canvas");
+  canvas.width = size; canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = bgColor;
+  ctx.fillRect(0, 0, size, size);
+  const img = new Image();
+  const blob = new Blob([svgString], { type: "image/svg+xml" });
+  const url = URL.createObjectURL(blob);
+  img.onload = () => {
+    const scale = Math.min(size / img.width, size / img.height) * 0.8;
+    const w = img.width * scale;
+    const h = img.height * scale;
+    ctx.drawImage(img, (size - w) / 2, (size - h) / 2, w, h);
+    canvas.toBlob((b) => {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(b);
+      a.download = filename; a.click();
+    }, "image/jpeg", 0.95);
+    URL.revokeObjectURL(url);
+  };
+  img.src = url;
+}
 
-  // Load Google Fonts
+// ─── Main App ───
+export default function SvgLogoEngine() {
+  const [svgRaw, setSvgRaw] = useState(null);
+  const [svgString, setSvgString] = useState("");
+  const [extractedColors, setExtractedColors] = useState([]);
+  const [selectedPalette, setSelectedPalette] = useState(0);
+  const [customColors, setCustomColors] = useState(["#1A1A1A", "#444444", "#888888", "#CCCCCC", "#F5F5F5"]);
+  const [useCustom, setUseCustom] = useState(false);
+  const [colorMap, setColorMap] = useState({});
+  const [activeTab, setActiveTab] = useState("remap");
+  const [dragOver, setDragOver] = useState(false);
+  const fileRef = useRef(null);
+
+  const brandColors = useCustom ? customColors : PALETTES[selectedPalette].colors;
+
+  // Process SVG upload
+  const handleFile = useCallback((file) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      let raw = e.target.result;
+      // Make SVG scalable: ensure viewBox exists and remove fixed width/height
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(raw, "image/svg+xml");
+      const svgEl = doc.querySelector("svg");
+      if (svgEl) {
+        if (!svgEl.getAttribute("viewBox")) {
+          const w = svgEl.getAttribute("width") || "100";
+          const h = svgEl.getAttribute("height") || "100";
+          svgEl.setAttribute("viewBox", `0 0 ${parseFloat(w)} ${parseFloat(h)}`);
+        }
+        svgEl.setAttribute("width", "100%");
+        svgEl.setAttribute("height", "100%");
+        raw = new XMLSerializer().serializeToString(svgEl);
+      }
+      setSvgRaw(raw);
+      setSvgString(raw);
+      const colors = extractSvgColors(raw);
+      setExtractedColors(colors);
+      // Auto-map: assign brand colors to extracted colors in order of luminance
+      const sorted = [...colors].sort((a, b) => getLuminance(a) - getLuminance(b));
+      const autoMap = {};
+      sorted.forEach((c, i) => {
+        autoMap[c] = brandColors[i % brandColors.length];
+      });
+      setColorMap(autoMap);
+    };
+    reader.readAsText(file);
+  }, [brandColors]);
+
+  // Recolor SVG when colorMap changes
+  const remappedSvg = useMemo(() => {
+    if (!svgRaw) return "";
+    return recolorSvg(svgRaw, colorMap);
+  }, [svgRaw, colorMap]);
+
+  // Generate all variations
+  const variations = useMemo(() => {
+    if (!svgRaw || extractedColors.length === 0) return [];
+    const v = [];
+
+    // Original
+    v.push({ label: "Original", svg: svgRaw, bg: "#FFFFFF" });
+
+    // Remapped (brand colors)
+    v.push({ label: "Brand Colors", svg: remappedSvg, bg: "#FFFFFF" });
+
+    // On dark background
+    v.push({ label: "On Dark", svg: remappedSvg, bg: "#1A1A1A" });
+
+    // On brand primary
+    v.push({ label: `On ${brandColors[0]}`, svg: remappedSvg, bg: brandColors[0], sublabel: brandColors[0] });
+
+    // Monochrome in each brand color
+    brandColors.forEach((bc, i) => {
+      v.push({
+        label: `Mono ${["Primary", "Secondary", "Accent", "Neutral", "Light"][i] || `Color ${i + 1}`}`,
+        svg: generateMonochrome(svgRaw, extractedColors, bc),
+        bg: "#FFFFFF",
+        sublabel: bc
+      });
+    });
+
+    // Single color (flat) in primary & white
+    v.push({ label: "Flat Primary", svg: generateSingleColor(svgRaw, extractedColors, brandColors[0]), bg: "#FFFFFF", sublabel: brandColors[0] });
+    v.push({ label: "Flat White", svg: generateSingleColor(svgRaw, extractedColors, "#FFFFFF"), bg: brandColors[0], sublabel: "#FFFFFF" });
+
+    // Inverted
+    v.push({ label: "High Contrast", svg: generateInverted(svgRaw, extractedColors), bg: "#FFFFFF" });
+    v.push({ label: "High Contrast Dark", svg: generateInverted(svgRaw, extractedColors), bg: "#1A1A1A" });
+
+    return v;
+  }, [svgRaw, extractedColors, remappedSvg, brandColors]);
+
+  // ─── Styles ───
+  const fontLink = "https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Mono&display=swap";
+
   useEffect(() => {
-    const families = GOOGLE_FONTS.map(f => f.name.replace(/ /g, '+')).join('&family=');
-    const link = document.createElement('link');
-    link.href = `https://fonts.googleapis.com/css2?family=${families}:wght@400;600;700&display=swap`;
-    link.rel = 'stylesheet';
+    const link = document.createElement("link");
+    link.href = fontLink; link.rel = "stylesheet";
     document.head.appendChild(link);
-    // Also load DM Sans for UI
-    const ui = document.createElement('link');
-    ui.href = 'https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap';
-    ui.rel = 'stylesheet';
-    document.head.appendChild(ui);
   }, []);
 
-  const inputStyle = {
-    width: "100%", padding: "12px 16px", border: "1px solid #ddd",
-    borderRadius: 10, fontSize: 15, fontFamily: "'DM Sans', sans-serif",
-    outline: "none", boxSizing: "border-box", transition: "border-color 0.2s",
-  };
+  const uiFont = "'DM Sans', sans-serif";
 
-  const textareaStyle = {
-    ...inputStyle, minHeight: 80, resize: "vertical", lineHeight: 1.6
-  };
-
-  const labelStyle = {
-    fontSize: 13, fontWeight: 600, color: "#555", marginBottom: 6,
-    display: "block", textTransform: "uppercase", letterSpacing: 1
-  };
-
-  const btnPrimary = {
-    padding: "14px 32px", background: "#1a1a1a", color: "#fff",
-    border: "none", borderRadius: 10, fontSize: 15, fontWeight: 600,
-    cursor: "pointer", fontFamily: "'DM Sans', sans-serif",
-    transition: "all 0.2s", letterSpacing: 0.5
-  };
-
-  const btnSecondary = {
-    ...btnPrimary, background: "transparent", color: "#1a1a1a",
-    border: "1px solid #ddd"
-  };
-
-  const canNext = () => {
-    if (step === 0) return !!logo;
-    if (step === 1) return !!brandName;
-    if (step === 2) return !!headingFont && !!bodyFont;
-    return true;
-  };
-
-  const data = {
-    logo, brandName, tagline, industry, mission, vision, about,
-    headingFont, bodyFont, palette: useCustom ? customColors : PALETTES[paletteIndex]?.colors,
-    customColors, paletteIndex: useCustom ? null : paletteIndex
-  };
-
-  if (step === 4) {
+  if (!svgRaw) {
     return (
-      <div style={{ fontFamily: "'DM Sans', sans-serif" }}>
-        <div style={{
-          padding: "20px 40px", background: "#fff",
-          borderBottom: "1px solid #eee", display: "flex",
-          justifyContent: "space-between", alignItems: "center",
-          position: "sticky", top: 0, zIndex: 100
-        }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <div style={{
+        fontFamily: uiFont, minHeight: "100vh",
+        background: "#0A0A0A",
+        display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+        padding: 40, color: "#fff"
+      }}>
+        {/* Decorative elements */}
+        <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, overflow: "hidden", pointerEvents: "none" }}>
+          <div style={{ position: "absolute", top: "10%", left: "10%", width: 300, height: 300, borderRadius: "50%", background: "radial-gradient(circle, rgba(99,102,241,0.08), transparent)", filter: "blur(60px)" }} />
+          <div style={{ position: "absolute", bottom: "20%", right: "15%", width: 400, height: 400, borderRadius: "50%", background: "radial-gradient(circle, rgba(236,72,153,0.06), transparent)", filter: "blur(80px)" }} />
+        </div>
+
+        <div style={{ position: "relative", zIndex: 1, textAlign: "center", maxWidth: 520 }}>
+          <div style={{
+            display: "inline-flex", alignItems: "center", gap: 10, marginBottom: 32,
+            padding: "8px 16px", background: "rgba(255,255,255,0.05)",
+            borderRadius: 40, border: "1px solid rgba(255,255,255,0.08)"
+          }}>
             <div style={{
-              width: 32, height: 32, background: "#1a1a1a", borderRadius: 8,
+              width: 28, height: 28, background: "#fff", borderRadius: 7,
               display: "flex", alignItems: "center", justifyContent: "center",
-              color: "#fff", fontWeight: 700, fontSize: 14
+              fontWeight: 800, fontSize: 14, color: "#0A0A0A"
             }}>B</div>
-            <span style={{ fontWeight: 700, fontSize: 16 }}>BrandForge</span>
+            <span style={{ fontWeight: 600, fontSize: 14, letterSpacing: 0.5 }}>BrandForge</span>
+            <span style={{ fontSize: 11, color: "#666", borderLeft: "1px solid #333", paddingLeft: 10, marginLeft: 4 }}>Logo Engine</span>
           </div>
-          <div style={{ display: "flex", gap: 10 }}>
-            <button
-              onClick={() => setStep(0)}
-              style={{ ...btnSecondary, padding: "10px 20px", fontSize: 13 }}
-            >
-              ← Edit
-            </button>
-            <button
-              onClick={() => window.print?.()}
-              style={{ ...btnPrimary, padding: "10px 20px", fontSize: 13 }}
-            >
-              📄 Export / Print
-            </button>
+
+          <h1 style={{
+            fontSize: 52, fontWeight: 700, margin: "0 0 16px",
+            lineHeight: 1.1, letterSpacing: -2,
+            background: "linear-gradient(135deg, #fff 0%, #999 100%)",
+            WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent"
+          }}>
+            Drop your SVG.<br/>Get every variation.
+          </h1>
+          <p style={{ fontSize: 17, color: "#666", marginBottom: 40, lineHeight: 1.6 }}>
+            Upload your logo and we'll parse every color, remap it to your brand palette,
+            and generate all the variations you need — in seconds.
+          </p>
+
+          <div
+            onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(e) => { e.preventDefault(); setDragOver(false); handleFile(e.dataTransfer.files[0]); }}
+            onClick={() => fileRef.current?.click()}
+            style={{
+              border: `2px dashed ${dragOver ? "#fff" : "#333"}`,
+              borderRadius: 20, padding: "48px 40px",
+              cursor: "pointer",
+              background: dragOver ? "rgba(255,255,255,0.03)" : "rgba(255,255,255,0.01)",
+              transition: "all 0.3s"
+            }}
+          >
+            <input ref={fileRef} type="file" accept=".svg" hidden onChange={(e) => handleFile(e.target.files[0])} />
+            <div style={{ fontSize: 40, marginBottom: 12, opacity: 0.6 }}>
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+                <polyline points="17 8 12 3 7 8"/>
+                <line x1="12" y1="3" x2="12" y2="15"/>
+              </svg>
+            </div>
+            <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 4 }}>
+              Drop your SVG logo here
+            </div>
+            <div style={{ color: "#555", fontSize: 13 }}>
+              or click to browse · SVG files only
+            </div>
+          </div>
+
+          <div style={{
+            marginTop: 32, display: "flex", gap: 24, justifyContent: "center",
+            fontSize: 12, color: "#444"
+          }}>
+            <span>✦ Color parsing</span>
+            <span>✦ Brand remapping</span>
+            <span>✦ 15+ variations</span>
+            <span>✦ PNG / JPEG / SVG export</span>
           </div>
         </div>
-        <BrandPreview data={data} />
       </div>
     );
   }
 
+  // ─── Main Editor UI ───
   return (
     <div style={{
-      fontFamily: "'DM Sans', sans-serif",
-      minHeight: "100vh",
-      background: "linear-gradient(180deg, #f8f8f8, #fff)",
-      display: "flex", flexDirection: "column", alignItems: "center",
-      padding: "40px 20px"
+      fontFamily: uiFont, minHeight: "100vh",
+      background: "#F5F5F0",
+      color: "#1a1a1a"
     }}>
-      {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-        <div style={{
-          width: 40, height: 40, background: "#1a1a1a", borderRadius: 10,
-          display: "flex", alignItems: "center", justifyContent: "center",
-          color: "#fff", fontWeight: 700, fontSize: 18
-        }}>B</div>
-        <span style={{ fontWeight: 700, fontSize: 22, letterSpacing: -0.5 }}>BrandForge</span>
-      </div>
-      <p style={{ color: "#999", fontSize: 14, marginBottom: 32, textAlign: "center" }}>
-        Upload your logo → Answer a few questions → Get a complete brand identity
-      </p>
-
+      {/* Top Bar */}
       <div style={{
-        width: "100%", maxWidth: 600, background: "#fff",
-        borderRadius: 20, padding: "40px 36px",
-        boxShadow: "0 1px 3px rgba(0,0,0,0.04), 0 8px 32px rgba(0,0,0,0.06)"
+        padding: "12px 24px",
+        background: "#fff",
+        borderBottom: "1px solid #eee",
+        display: "flex", justifyContent: "space-between", alignItems: "center",
+        position: "sticky", top: 0, zIndex: 100
       }}>
-        <StepIndicator current={step} total={4} />
-
-        {/* Step 0: Logo Upload */}
-        {step === 0 && (
-          <div>
-            <h2 style={{ margin: "0 0 4px", fontSize: 24, fontWeight: 700, color: "#1a1a1a" }}>
-              Upload Your Logo
-            </h2>
-            <p style={{ color: "#888", marginBottom: 24, fontSize: 14 }}>
-              Start with your logo — we'll build everything around it.
-            </p>
-            <LogoUpload logo={logo} setLogo={setLogo} />
-          </div>
-        )}
-
-        {/* Step 1: Brand Info */}
-        {step === 1 && (
-          <div>
-            <h2 style={{ margin: "0 0 4px", fontSize: 24, fontWeight: 700, color: "#1a1a1a" }}>
-              Tell Us About the Brand
-            </h2>
-            <p style={{ color: "#888", marginBottom: 24, fontSize: 14 }}>
-              The essentials that define who this brand is.
-            </p>
-            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-              <div>
-                <label style={labelStyle}>Brand Name *</label>
-                <input style={inputStyle} value={brandName} onChange={e => setBrandName(e.target.value)} placeholder="e.g. Lumina Studio" />
-              </div>
-              <div>
-                <label style={labelStyle}>Tagline</label>
-                <input style={inputStyle} value={tagline} onChange={e => setTagline(e.target.value)} placeholder="e.g. Designing the future, today" />
-              </div>
-              <div>
-                <label style={labelStyle}>Industry</label>
-                <select
-                  style={{ ...inputStyle, cursor: "pointer", appearance: "none", background: `#fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23999' fill='none' stroke-width='1.5'/%3E%3C/svg%3E") no-repeat right 16px center` }}
-                  value={industry} onChange={e => setIndustry(e.target.value)}
-                >
-                  <option value="">Select industry…</option>
-                  {INDUSTRIES.map(i => <option key={i} value={i}>{i}</option>)}
-                </select>
-              </div>
-              <div>
-                <label style={labelStyle}>Mission Statement</label>
-                <textarea style={textareaStyle} value={mission} onChange={e => setMission(e.target.value)}
-                  placeholder="What does this brand exist to do?" />
-              </div>
-              <div>
-                <label style={labelStyle}>Vision</label>
-                <textarea style={textareaStyle} value={vision} onChange={e => setVision(e.target.value)}
-                  placeholder="Where is this brand headed?" />
-              </div>
-              <div>
-                <label style={labelStyle}>About the Brand</label>
-                <textarea style={{ ...textareaStyle, minHeight: 100 }} value={about} onChange={e => setAbout(e.target.value)}
-                  placeholder="A brief description of the brand, its values, and what makes it unique…" />
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Step 2: Typography */}
-        {step === 2 && (
-          <div>
-            <h2 style={{ margin: "0 0 4px", fontSize: 24, fontWeight: 700, color: "#1a1a1a" }}>
-              Choose Your Typography
-            </h2>
-            <p style={{ color: "#888", marginBottom: 24, fontSize: 14 }}>
-              Select a heading and body font pairing.
-            </p>
-            <FontSelector selected={headingFont} onSelect={setHeadingFont} label="Heading Font" />
-            <FontSelector selected={bodyFont} onSelect={setBodyFont} label="Body Font" />
-            <div style={{ marginTop: 20, padding: 24, background: "#fafafa", borderRadius: 12 }}>
-              <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 2, color: "#999", marginBottom: 12 }}>Preview</div>
-              <div style={{ fontFamily: `'${headingFont}', serif`, fontSize: 28, fontWeight: 700, color: "#1a1a1a", marginBottom: 8 }}>
-                {brandName || "Brand Name"} Heading
-              </div>
-              <div style={{ fontFamily: `'${bodyFont}', sans-serif`, fontSize: 14, color: "#666", lineHeight: 1.7 }}>
-                This is how your body text will look. The right font pairing creates visual hierarchy and reinforces your brand personality across every touchpoint.
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Step 3: Colors */}
-        {step === 3 && (
-          <div>
-            <h2 style={{ margin: "0 0 4px", fontSize: 24, fontWeight: 700, color: "#1a1a1a" }}>
-              Select Color Palette
-            </h2>
-            <p style={{ color: "#888", marginBottom: 24, fontSize: 14 }}>
-              Choose a pre-built palette or create your own.
-            </p>
-            <ColorPaletteSelector
-              selected={paletteIndex}
-              onSelect={(i) => { setPaletteIndex(i); setUseCustom(false); }}
-              customColors={customColors}
-              setCustomColors={(c) => { setCustomColors(c); setUseCustom(true); }}
-            />
-          </div>
-        )}
-
-        {/* Navigation */}
-        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 32 }}>
-          {step > 0 ? (
-            <button style={btnSecondary} onClick={() => setStep(step - 1)}>← Back</button>
-          ) : <div />}
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{
+            width: 28, height: 28, background: "#1a1a1a", borderRadius: 7,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            color: "#fff", fontWeight: 800, fontSize: 13
+          }}>B</div>
+          <span style={{ fontWeight: 700, fontSize: 15 }}>BrandForge</span>
+          <span style={{ color: "#ccc", margin: "0 6px" }}>·</span>
+          <span style={{ color: "#888", fontSize: 13 }}>Logo Engine</span>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
           <button
+            onClick={() => { setSvgRaw(null); setSvgString(""); setExtractedColors([]); setColorMap({}); }}
             style={{
-              ...btnPrimary,
-              opacity: canNext() ? 1 : 0.4,
-              pointerEvents: canNext() ? "auto" : "none"
+              padding: "8px 16px", background: "transparent", color: "#666",
+              border: "1px solid #ddd", borderRadius: 8, fontSize: 12,
+              fontWeight: 600, cursor: "pointer", fontFamily: uiFont
             }}
-            onClick={() => setStep(step + 1)}
           >
-            {step === 3 ? "Generate Brand Identity →" : "Continue →"}
+            ↩ New Logo
           </button>
         </div>
       </div>
 
-      <p style={{ color: "#ccc", fontSize: 12, marginTop: 32 }}>
-        BrandForge — Brand identity made simple
-      </p>
+      <div style={{ display: "flex", minHeight: "calc(100vh - 53px)" }}>
+        {/* Left Sidebar */}
+        <div style={{
+          width: 340, background: "#fff", borderRight: "1px solid #eee",
+          padding: 24, overflowY: "auto", flexShrink: 0
+        }}>
+          {/* Original Logo Preview */}
+          <div style={{
+            background: "#fafafa", borderRadius: 12, padding: 20,
+            marginBottom: 24, textAlign: "center"
+          }}>
+            <div
+              dangerouslySetInnerHTML={{ __html: svgRaw }}
+              style={{ width: 80, height: 80, margin: "0 auto 8px" }}
+            />
+            <div style={{ fontSize: 11, color: "#999", textTransform: "uppercase", letterSpacing: 1 }}>
+              Original · {extractedColors.length} color{extractedColors.length !== 1 ? "s" : ""} detected
+            </div>
+          </div>
+
+          {/* Tabs */}
+          <div style={{ display: "flex", gap: 4, marginBottom: 20, background: "#f5f5f5", borderRadius: 10, padding: 3 }}>
+            {[["remap", "Color Map"], ["palette", "Palette"]].map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => setActiveTab(key)}
+                style={{
+                  flex: 1, padding: "8px 0", border: "none", borderRadius: 8,
+                  fontSize: 12, fontWeight: 600, cursor: "pointer",
+                  background: activeTab === key ? "#fff" : "transparent",
+                  color: activeTab === key ? "#1a1a1a" : "#888",
+                  boxShadow: activeTab === key ? "0 1px 3px rgba(0,0,0,0.08)" : "none",
+                  fontFamily: uiFont, transition: "all 0.15s"
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {activeTab === "remap" && (
+            <ColorMapper
+              extractedColors={extractedColors}
+              brandColors={brandColors}
+              colorMap={colorMap}
+              setColorMap={setColorMap}
+            />
+          )}
+
+          {activeTab === "palette" && (
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 600, color: "#999", textTransform: "uppercase", letterSpacing: 1, marginBottom: 10 }}>
+                Brand Palette
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 16 }}>
+                {PALETTES.map((p, i) => (
+                  <PaletteStrip
+                    key={p.name}
+                    palette={p}
+                    isSelected={selectedPalette === i && !useCustom}
+                    onClick={() => {
+                      setSelectedPalette(i);
+                      setUseCustom(false);
+                      // Re-auto-map
+                      const sorted = [...extractedColors].sort((a, b) => getLuminance(a) - getLuminance(b));
+                      const autoMap = {};
+                      sorted.forEach((c, j) => { autoMap[c] = p.colors[j % p.colors.length]; });
+                      setColorMap(autoMap);
+                    }}
+                  />
+                ))}
+              </div>
+              <div style={{
+                fontSize: 11, fontWeight: 600, color: "#999", textTransform: "uppercase",
+                letterSpacing: 1, marginBottom: 8, marginTop: 16
+              }}>
+                Custom Colors
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                {customColors.map((c, i) => (
+                  <div key={i} style={{ textAlign: "center" }}>
+                    <input
+                      type="color" value={c}
+                      onChange={(e) => {
+                        const nc = [...customColors];
+                        nc[i] = e.target.value.toUpperCase();
+                        setCustomColors(nc);
+                        setUseCustom(true);
+                        const sorted = [...extractedColors].sort((a, b) => getLuminance(a) - getLuminance(b));
+                        const autoMap = {};
+                        sorted.forEach((col, j) => { autoMap[col] = nc[j % nc.length]; });
+                        setColorMap(autoMap);
+                      }}
+                      style={{ width: 40, height: 40, border: "2px solid #eee", borderRadius: 8, cursor: "pointer", padding: 0 }}
+                    />
+                    <div style={{ fontSize: 9, color: "#bbb", fontFamily: "'Space Mono', monospace", marginTop: 3 }}>
+                      {c}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Main Content Area */}
+        <div style={{ flex: 1, padding: 32, overflowY: "auto" }}>
+          {/* Section: Brand Remapped */}
+          <div style={{ marginBottom: 40 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+              <div>
+                <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, letterSpacing: -0.5 }}>
+                  Logo Variations
+                </h2>
+                <p style={{ margin: "4px 0 0", color: "#888", fontSize: 13 }}>
+                  {variations.length} variations generated · Click any card to download
+                </p>
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                {["SVG", "PNG", "JPEG"].map(fmt => (
+                  <span key={fmt} style={{
+                    padding: "4px 10px", background: "#fff", borderRadius: 6,
+                    fontSize: 10, fontWeight: 700, color: "#666",
+                    border: "1px solid #e5e5e5", letterSpacing: 0.5
+                  }}>
+                    {fmt}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <div style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
+              gap: 14
+            }}>
+              {variations.map((v, i) => (
+                <div key={i} style={{ position: "relative" }}>
+                  <SvgDisplay svgString={v.svg} bg={v.bg} label={v.label} sublabel={v.sublabel} size={70} />
+                  {/* Download buttons on hover */}
+                  <div style={{
+                    position: "absolute", bottom: 8, right: 8,
+                    display: "flex", gap: 3, opacity: 0,
+                    transition: "opacity 0.2s"
+                  }}
+                  className="dl-btns"
+                  >
+                    <button
+                      onClick={(e) => { e.stopPropagation(); downloadSvg(v.svg, `logo-${v.label.toLowerCase().replace(/\s+/g, "-")}.svg`); }}
+                      style={{
+                        padding: "4px 8px", fontSize: 9, fontWeight: 700,
+                        background: "#1a1a1a", color: "#fff", border: "none",
+                        borderRadius: 5, cursor: "pointer", fontFamily: uiFont
+                      }}
+                    >SVG</button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); downloadPng(v.svg, `logo-${v.label.toLowerCase().replace(/\s+/g, "-")}.png`); }}
+                      style={{
+                        padding: "4px 8px", fontSize: 9, fontWeight: 700,
+                        background: "#1a1a1a", color: "#fff", border: "none",
+                        borderRadius: 5, cursor: "pointer", fontFamily: uiFont
+                      }}
+                    >PNG</button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); downloadJpeg(v.svg, `logo-${v.label.toLowerCase().replace(/\s+/g, "-")}.jpg`, v.bg); }}
+                      style={{
+                        padding: "4px 8px", fontSize: 9, fontWeight: 700,
+                        background: "#1a1a1a", color: "#fff", border: "none",
+                        borderRadius: 5, cursor: "pointer", fontFamily: uiFont
+                      }}
+                    >JPG</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Size Variations */}
+          <div style={{ marginBottom: 40 }}>
+            <h2 style={{ margin: "0 0 4px", fontSize: 22, fontWeight: 700, letterSpacing: -0.5 }}>
+              Size Reference
+            </h2>
+            <p style={{ margin: "0 0 16px", color: "#888", fontSize: 13 }}>
+              How your logo looks at different scales
+            </p>
+            <div style={{
+              display: "flex", alignItems: "flex-end", gap: 20,
+              background: "#fff", borderRadius: 16, padding: 32,
+              border: "1px solid #eee"
+            }}>
+              {[{ s: 16, l: "Favicon" }, { s: 32, l: "32px" }, { s: 48, l: "48px" }, { s: 64, l: "App Icon" }, { s: 96, l: "96px" }, { s: 128, l: "128px" }].map(({ s, l }) => (
+                <div key={s} style={{ textAlign: "center" }}>
+                  <div
+                    dangerouslySetInnerHTML={{ __html: remappedSvg }}
+                    style={{ width: s, height: s, margin: "0 auto 8px" }}
+                  />
+                  <div style={{ fontSize: 10, color: "#aaa", fontFamily: "'Space Mono', monospace" }}>{l}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Clear Space Guide */}
+          <div style={{ marginBottom: 40 }}>
+            <h2 style={{ margin: "0 0 4px", fontSize: 22, fontWeight: 700, letterSpacing: -0.5 }}>
+              Clear Space & Minimum Size
+            </h2>
+            <p style={{ margin: "0 0 16px", color: "#888", fontSize: 13 }}>
+              Guidelines for proper logo usage
+            </p>
+            <div style={{
+              display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16
+            }}>
+              <div style={{ background: "#fff", borderRadius: 16, padding: 32, border: "1px solid #eee", textAlign: "center" }}>
+                <div style={{ position: "relative", display: "inline-block" }}>
+                  <div style={{
+                    border: "2px dashed rgba(255,0,0,0.2)", padding: 24,
+                    borderRadius: 8, position: "relative"
+                  }}>
+                    <div style={{
+                      position: "absolute", top: 0, left: "50%", transform: "translate(-50%, -50%)",
+                      background: "#fff", padding: "0 6px", fontSize: 9, color: "#e74c3c",
+                      fontWeight: 600, fontFamily: "'Space Mono', monospace"
+                    }}>X</div>
+                    <div style={{
+                      position: "absolute", left: 0, top: "50%", transform: "translate(-50%, -50%) rotate(-90deg)",
+                      background: "#fff", padding: "0 6px", fontSize: 9, color: "#e74c3c",
+                      fontWeight: 600, fontFamily: "'Space Mono', monospace"
+                    }}>X</div>
+                    <div
+                      dangerouslySetInnerHTML={{ __html: remappedSvg }}
+                      style={{ width: 80, height: 80 }}
+                    />
+                  </div>
+                </div>
+                <div style={{ marginTop: 16, fontSize: 12, color: "#666", lineHeight: 1.6 }}>
+                  <strong>Clear Space</strong><br/>
+                  Maintain a minimum clear space of "X" around all sides, where X equals the height of the logomark.
+                </div>
+              </div>
+              <div style={{ background: "#fff", borderRadius: 16, padding: 32, border: "1px solid #eee" }}>
+                <div style={{ display: "flex", justifyContent: "center", gap: 20, alignItems: "flex-end", marginBottom: 16 }}>
+                  <div style={{ textAlign: "center" }}>
+                    <div dangerouslySetInnerHTML={{ __html: remappedSvg }} style={{ width: 24, height: 24, margin: "0 auto", opacity: 0.3 }} />
+                    <div style={{ fontSize: 9, color: "#e74c3c", marginTop: 4, fontFamily: "'Space Mono'" }}>✗ Too small</div>
+                  </div>
+                  <div style={{ textAlign: "center" }}>
+                    <div dangerouslySetInnerHTML={{ __html: remappedSvg }} style={{ width: 48, height: 48, margin: "0 auto" }} />
+                    <div style={{ fontSize: 9, color: "#2ecc71", marginTop: 4, fontFamily: "'Space Mono'" }}>✓ Minimum</div>
+                  </div>
+                  <div style={{ textAlign: "center" }}>
+                    <div dangerouslySetInnerHTML={{ __html: remappedSvg }} style={{ width: 80, height: 80, margin: "0 auto" }} />
+                    <div style={{ fontSize: 9, color: "#2ecc71", marginTop: 4, fontFamily: "'Space Mono'" }}>✓ Preferred</div>
+                  </div>
+                </div>
+                <div style={{ fontSize: 12, color: "#666", lineHeight: 1.6, textAlign: "center" }}>
+                  <strong>Minimum Size</strong><br/>
+                  Never display the logo smaller than 48px wide for digital or 12mm for print.
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Incorrect Usage */}
+          <div>
+            <h2 style={{ margin: "0 0 4px", fontSize: 22, fontWeight: 700, letterSpacing: -0.5 }}>
+              Incorrect Usage
+            </h2>
+            <p style={{ margin: "0 0 16px", color: "#888", fontSize: 13 }}>
+              Never modify the logo in these ways
+            </p>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+              {[
+                { label: "Don't stretch", transform: "scaleX(1.5)" },
+                { label: "Don't rotate", transform: "rotate(15deg)" },
+                { label: "Don't skew", transform: "skewX(15deg)" },
+                { label: "Don't add effects", filter: "drop-shadow(4px 4px 0 rgba(255,0,0,0.5))" },
+              ].map((rule) => (
+                <div key={rule.label} style={{
+                  background: "#fff", borderRadius: 12, padding: 20,
+                  border: "2px solid #fee2e2", textAlign: "center"
+                }}>
+                  <div style={{
+                    width: 56, height: 56, margin: "0 auto 10px",
+                    transform: rule.transform || "none",
+                    filter: rule.filter || "none",
+                    opacity: 0.6
+                  }}>
+                    <div dangerouslySetInnerHTML={{ __html: remappedSvg }} style={{ width: "100%", height: "100%" }} />
+                  </div>
+                  <div style={{
+                    position: "relative",
+                    display: "inline-flex", alignItems: "center", gap: 4
+                  }}>
+                    <span style={{ color: "#e74c3c", fontSize: 14, fontWeight: 700 }}>✗</span>
+                    <span style={{ fontSize: 11, color: "#999", fontWeight: 600 }}>{rule.label}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Hover styles for download buttons */}
+      <style>{`
+        div:hover > .dl-btns { opacity: 1 !important; }
+      `}</style>
     </div>
   );
 }
